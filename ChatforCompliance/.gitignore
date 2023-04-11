@@ -1,0 +1,27 @@
+# .gitignore
+
+# Ignore PyInstaller build output
+dist/
+build/
+
+# Ignore PyInstaller spec file (optional, only if you don't want to track it)
+*.spec
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore temporary files created by various editors and operating systems
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+*.DS_Store
+
+#ignore output csv and excel files and doc files used for testing and output tracking
+*.csv
+*.xlsx
+*.docx
