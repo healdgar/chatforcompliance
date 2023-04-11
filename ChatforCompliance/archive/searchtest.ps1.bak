@@ -1,5 +1,0 @@
-$searchTerm = Read-Host "Enter search term"
-$lines = Get-Content -Path 'CAL7ps.txt'
-$matches = $lines | Select-String -Pattern $searchTerm -Fuzzy | Sort-Object -Property LineNumber
-$top10 = $matches | Select-Object -First 10
-Write-Host $top10
