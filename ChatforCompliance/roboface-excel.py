@@ -1,37 +1,46 @@
 import pandas as pd
 import re
 import os
+import sys
 from roboface import write_answer
 
+# Determine if the script is running as a compiled executable or as a Python script
+if getattr(sys, 'frozen', False):
+    # Running as an exe
+    excels_dir = os.path.dirname(sys.executable)
+    excels_dir = os.path.join(os.path.dirname(excels_dir), "Excels")
+else:
+    # Running as a script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(script_dir)
+    excels_dir = os.path.join(parent_dir, 'Excels')
+
+
 # Define the Excel file name.  Permit the user to enter the file name without the extension.  Provide appropriate error messages if the file is not found.
+print(f"Looking for Excel files in: {excels_dir}")
 while True:
     excel_filename = input('Please enter the filename of the Excel that you placed in the "Excels" folder: ')
     file_ext = os.path.splitext(excel_filename)[-1].lower()
 
     if file_ext == "":
-        if os.path.isfile(f"Excels/{excel_filename}.xlsx"):
+        if os.path.isfile(os.path.join(excels_dir, f"{excel_filename}.xlsx")):
             excel_filename += ".xlsx"
             break
-        elif os.path.isfile(f"Excels/{excel_filename}.xls"):
+        elif os.path.isfile(os.path.join(excels_dir, f"{excel_filename}.xls")):
             excel_filename += ".xls"
             break
         else:
             print("File not found. Please make sure the file is in the 'Excels' folder and try again.")
     elif file_ext in ['.xlsx', '.xls']:
-        if os.path.isfile(f"Excels/{excel_filename}"):
+        if os.path.isfile(os.path.join(excels_dir, excel_filename)):
             break
         else:
             print("File not found. Please make sure the file is in the 'Excels' folder and try again.")
     else:
         print("Invalid file extension. Please enter a valid Excel filename.")
 
-
 source = f"roboface-excel.py, excel_filename={excel_filename}"
 
-# Construct the full file path
-script_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(script_dir)
-excels_dir = os.path.join(parent_dir, 'Excels')
 excel_filepath = os.path.join(excels_dir, excel_filename)
 
 # Load the Excel file
