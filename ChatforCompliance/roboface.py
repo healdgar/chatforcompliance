@@ -111,7 +111,7 @@ if not os.path.exists(embeddings_filename):
 with open(embeddings_filename, 'rb') as f:
     embeddings_list = pickle.load(f)
 
-def get_parameters(timestamp, user, baseGPTmodel, creativity, max_tokens, searchTerm, similarity_threshold, matching_context, tuning_context, top_n_matches, tokens, answer):
+def get_parameters(timestamp, user, baseGPTmodel, creativity, max_tokens, searchTerm, similarity_threshold, matching_context, tuning_context, top_n_matches, tokens, answer, source):
     return {
         'timestamp': timestamp,
         'user': user,
@@ -124,7 +124,8 @@ def get_parameters(timestamp, user, baseGPTmodel, creativity, max_tokens, search
         'tuning_context': tuning_context,
         'top_n_matches': top_n_matches,
         'tokens': tokens,
-        'answer': answer
+        'answer': answer,
+        'source': source
     }
 
 def count_tokens(text):
@@ -144,7 +145,7 @@ def truncate_prior_context(prior_questions, max_tokens=context_length):
 
     return truncated_prior_questions
 
-def write_answer(searchTerm):
+def write_answer(searchTerm, source="direct Roboface query"):
     #variables
     answers = ""
     timestamp = datetime.utcnow().isoformat()
@@ -226,22 +227,29 @@ def write_answer(searchTerm):
     user_message['content'] = user_message['content'].format(searchTerm=searchTerm)
 
     # Add prior context to the messages array with alternating roles
-    prior_context_messages = [{"role": "user", "content": question} for question in prior_questions] + [{"role": "assistant", "content": answer} for answer in prior_answers]
-    messages = [system_message, *prior_context_messages, user_message, {"role": "user", "content": "\n".join(tuning_context)}]
+    prior_context_messages = []
+    for i in range(len(prior_questions)):
+        prior_context_messages.append({"role": "user", "content": "Prior question: " + prior_questions[i]})
+        if i < len(prior_answers):
+            prior_context_messages.append({"role": "assistant", "content": "Prior answer: " + prior_answers[i]})
+
+    # Combine system message, prior context messages, and user message in the desired order
+    full_context_messages = [system_message] + prior_context_messages + [user_message]
 
     # Print the search term, top n matches, and the number of tokens in the messages array
-    tuningContext = messages[:2]
-    print("PRIOR CONTEXT:", prior_context_messages)
-    print("CLIENT QUESTION:", searchTerm)
-    print("QRA CONTEXT:", matching_context)
+    tuningContext = prior_context_messages
+    print("\033[31m" + "PRIOR CONTEXT:" + "\033[0m", prior_context_messages)
+    print("\033[31m" + "CLIENT QUESTION:" + "\033[0m", searchTerm)
+    print("\033[31m" + "QRA CONTEXT:" + "\033[0m", matching_context)
     # Print the number of tokens in the messages variable
-    tokens = sum(len(message['content'].split()) for message in messages)
+    tokens = sum(len(message['content'].split()) for message in full_context_messages)
     print(f"Number of tokens in messages: {tokens}")
 
     # Create a dictionary with the model, messages array, temperature, and max_tokens
+
     data = {
         "model": model,
-        "messages": messages,
+        "messages": full_context_messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
@@ -261,7 +269,7 @@ def write_answer(searchTerm):
     try:
         response = requests.post(apiUrl, headers=headers, data=jsonData).content
         answers = json.loads(response)['choices'][0]['message']['content']
-        print('ANSWER: ', answers)
+        print('\033[32mANSWER:\033[0m', answers)
         # Get the parameters using the new function
         parameters = get_parameters(
             timestamp=timestamp,
@@ -275,7 +283,8 @@ def write_answer(searchTerm):
             tuning_context=tuning_context,
             top_n_matches=top_n_matches,
             tokens=tokens,
-            answer=answers
+            answer=answers,
+            source=source  # Add the source parameter here
         )
 
         # Open CSV file for writing
@@ -285,10 +294,10 @@ def write_answer(searchTerm):
 
             if file.tell() == 0:
                 # File is empty, write header row
-                writer.writerow(['timestamp', 'user', 'baseGPTmodel', 'creativity', 'max response size', 'searchTerm', 'similarity_threshold', 'matching context','tuning context', 'tokens', 'answer'])
+                writer.writerow(['timestamp', 'user', 'baseGPTmodel', 'creativity', 'max response size', 'searchTerm', 'similarity_threshold', 'matching context','tuning context', 'tokens', 'answer', 'source'])  # Add 'source' to the header row
 
             # Write data row
-            writer.writerow([timestamp, user, model, temperature, max_tokens, searchTerm, similarity_threshold, matching_context, tuning_context, tokens, answers])
+            writer.writerow([timestamp, user, model, temperature, max_tokens, searchTerm, similarity_threshold, matching_context, tuning_context, tokens, answers, source])  # Add the source parameter when writing the row
 
     except requests.exceptions.RequestException as e:
         with open('error.txt', 'a', encoding='utf-8') as file:
@@ -328,11 +337,3 @@ if __name__ == '__main__':
             write_answer(search_term)
         else:
             break
-
-
-
-
-
-# Wait for user to hit any key before closing the script
-
-
