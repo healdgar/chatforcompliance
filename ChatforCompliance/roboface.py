@@ -207,7 +207,7 @@ def write_answer(searchTerm, source="direct Roboface query"):
         similarity_score = match['Similarity']  # Get similarity score
 
         # Concatenate all columns used to calculate similarity ('Question', 'Answer', 'Supporting Answer')
-        full_text = "Example Question: " + (row['Question'] or '') + "Example Answer: " + (row['Answer'] or '') + (row['Supporting Answer'] or '')
+        full_text = " Example Question: " + (row['Question'] or '') + " Example Answer: " + (row['Answer'] or '') + (row['Supporting Answer'] or '')
         full_text = full_text.replace('Rimini Street', 'ACME')  # Replace "Rimini Street" with "ACME"
         full_text = full_text.replace('RSI', 'ACME')
 
