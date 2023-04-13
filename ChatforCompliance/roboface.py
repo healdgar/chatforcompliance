@@ -207,19 +207,20 @@ def write_answer(searchTerm, source="direct Roboface query"):
         similarity_score = match['Similarity']  # Get similarity score
 
         # Concatenate all columns used to calculate similarity ('Question', 'Answer', 'Supporting Answer')
-        full_text = (row['Question'] or '') + ' ' + (row['Answer'] or '') + ' ' + (row['Supporting Answer'] or '')
+        full_text = "Example Question: " + (row['Question'] or '') + "Example Answer: " + (row['Answer'] or '') + (row['Supporting Answer'] or '')
         full_text = full_text.replace('Rimini Street', 'ACME')  # Replace "Rimini Street" with "ACME"
         full_text = full_text.replace('RSI', 'ACME')
 
-        # Construct context entry for display with Excel row number, similarity score, and full text
+        # Construct a display_entry for display with Excel row number, similarity score, and full text and a tuning_context for passing to the API
         display_entry = f"CAL Excel Row {excel_row_number} (Similarity: {similarity_score:.4f}): {full_text}"
         matching_context.append(display_entry)
+        # create tuning context that does not include status inforamtion.
+        tuning_context.append(full_text)
 
-        # Add only 'Answer' and 'Supporting Answer' to tuning context (no row number, similarity score, or 'Question')
-        answer = (row['Answer'] or '') + ' ' + (row['Supporting Answer'] or '')
-        answer = answer.replace('Rimini Street', 'ACME')  # Replace "Rimini Street" with "ACME"
-        answer = answer.replace('RSI', 'ACME')
-        tuning_context.append(answer)
+    tuning_context_entries = []
+
+    for text in tuning_context:
+        tuning_context_entries.append({"role": "user", "content": text})
 
     # Create a list of dictionaries with the search term, top n matches, and the messages array
     system_message = json.loads(config.get('parameters', 'system_message'))
@@ -233,8 +234,10 @@ def write_answer(searchTerm, source="direct Roboface query"):
         if i < len(prior_answers):
             prior_context_messages.append({"role": "assistant", "content": "Prior answer: " + prior_answers[i]})
 
-    # Combine system message, prior context messages, and user message in the desired order
-    full_context_messages = [system_message] + prior_context_messages + [user_message]
+    # Combine system message, prior context messages, and user message and tuning context in the desired order
+    full_context_messages = [system_message] + prior_context_messages + [user_message] + tuning_context_entries
+
+    print("FULL CONTEXT MESSAGES", full_context_messages)
 
     # Print the search term, top n matches, and the number of tokens in the messages array
     tuningContext = prior_context_messages
