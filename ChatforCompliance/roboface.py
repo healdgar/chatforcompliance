@@ -1,10 +1,10 @@
 import openai
 import sys
 import csv
-import requests
 import getpass
 import glob
 import os
+import time
 import openpyxl
 import configparser
 import json
@@ -67,11 +67,16 @@ def generate_embeddings_file(csv_list, filename):
     
     # Update the OpenAI package configuration with the API key
     openai.api_key = api_key
+
+    # Get replacements from config
+    replacements = {}
+    if config.has_section('replacements'):
+        replacements = dict(config.items('replacements'))
     
     for i, row in enumerate(csv_list):
         line = (row['Question'] or '') + ' ' + (row['Answer'] or '') + ' ' + (row['Supporting Answer'] or '')
-        line = line.replace('Rimini Street', 'ACME')  # Replace "Rimini Street" with "ACME"
-        line = line.replace('RSI', 'ACME')
+        for old, new in replacements.items():
+            line = line.replace(old, new)
         line_embeddings = get_embedding(line, engine='text-embedding-ada-002')
         embeddings_list.append(line_embeddings)
         print(f"Progress: {i + 1}/{len(csv_list)}")
@@ -145,25 +150,13 @@ def truncate_prior_context(prior_questions, max_tokens=context_length):
 
     return truncated_prior_questions
 
-def write_answer(searchTerm, source="direct Roboface query"):
-    #variables
-    answers = ""
-    timestamp = datetime.utcnow().isoformat()
-    user = getpass.getuser()
-    tuning_context = []
-    matching_context = []
-    global prior_questions
-    global prior_answers
 
-    # Truncate prior context to no more than 1000 tokens
-    prior_questions = truncate_prior_context(prior_questions)
-    prior_answers = truncate_prior_context(prior_answers)
-
+def _get_similarity_matches(searchTerm, csv_list, embeddings_list):
     # Get embeddings for the search term
-    engine = "text-embedding-ada-002"  # Specify the same engine used in generate_embeddings_file
+    engine = "text-embedding-ada-002"
     search_embeddings = get_embedding(searchTerm, engine=engine)
 
-     # Load similarity threshold from the configuration file
+    # Load similarity threshold from the configuration file
     similarity_threshold = float(config.get('parameters', 'similarity_threshold'))
         
     # Calculate the similarity of each row to the search term using embeddings
@@ -171,109 +164,133 @@ def write_answer(searchTerm, source="direct Roboface query"):
     for i, row in enumerate(csv_list):
         line_embeddings = embeddings_list[i]
         if line_embeddings is not None:
-            # Convert lists to NumPy arrays and then reshape
             search_embeddings_array = np.array(search_embeddings).reshape(1, -1)
             line_embeddings_array = np.array(line_embeddings).reshape(1, -1)
-            
-            # Calculate cosine similarity
             similarity = cosine_similarity(search_embeddings_array, line_embeddings_array)[0, 0]
             matches.append({'Row': row, 'Similarity': similarity})
 
-    # Sort matches based on similarity score in descending order
     matches.sort(key=lambda x: x['Similarity'], reverse=True)
-
-    # Filter matches based on similarity threshold
     filtered_matches = [match for match in matches if match['Similarity'] >= similarity_threshold]
 
-    # Check if there are any matches that meet the threshold
+    # Get replacements from config
+    replacements = {}
+    if config.has_section('replacements'):
+        replacements = dict(config.items('replacements'))
+
+    matching_context = []
+    tuning_context = []
+    
     if not filtered_matches:
-        # Indicate that no relevant responses were found
         matching_context = [f"No relevant content meeting the similarity threshold {similarity_threshold} were found in QRA."]
         tuning_context = [f"We have no specific information relating to this query."]
-        top_n_matches = []  # Set top_n_matches to an empty list
+        top_n_matches = []
     else:
-        # Select the top n matches, where n is specified in the config file
         top_n_matches = filtered_matches[:num_matches]
+        for i, match in enumerate(top_n_matches):
+            row = match['Row']
+            excel_row_number = row['ExcelRow']
+            similarity_score = match['Similarity']
+            full_text = " Example Question: " + (row['Question'] or '') + " Example Answer: " + (row['Answer'] or '') + (row['Supporting Answer'] or '')
+            for old, new_val in replacements.items():
+                full_text = full_text.replace(old, new_val)
+            
+            display_entry = f"CAL Excel Row {excel_row_number} (Similarity: {similarity_score:.4f}): {full_text}"
+            matching_context.append(display_entry)
+            tuning_context.append(full_text)
+            
+    return top_n_matches, matching_context, tuning_context
 
 
-        # Select the top n matches, where n is specified in the config file
-    top_n_matches = filtered_matches[:num_matches]
-
-    # Create tuning context using the top n matches and create display context
-
-    for i, match in enumerate(top_n_matches):
-        row = match['Row']
-        excel_row_number = row['ExcelRow']  # Extract Excel row number from the match
-        similarity_score = match['Similarity']  # Get similarity score
-
-        # Concatenate all columns used to calculate similarity ('Question', 'Answer', 'Supporting Answer')
-        full_text = " Example Question: " + (row['Question'] or '') + " Example Answer: " + (row['Answer'] or '') + (row['Supporting Answer'] or '')
-        full_text = full_text.replace('Rimini Street', 'ACME')  # Replace "Rimini Street" with "ACME"
-        full_text = full_text.replace('RSI', 'ACME')
-
-        # Construct a display_entry for display with Excel row number, similarity score, and full text and a tuning_context for passing to the API
-        display_entry = f"CAL Excel Row {excel_row_number} (Similarity: {similarity_score:.4f}): {full_text}"
-        matching_context.append(display_entry)
-        # create tuning context that does not include status inforamtion.
-        tuning_context.append(full_text)
-
-    tuning_context_entries = []
-
-    for text in tuning_context:
-        tuning_context_entries.append({"role": "user", "content": text})
-
-    # Create a list of dictionaries with the search term, top n matches, and the messages array
+def _prepare_openai_messages(searchTerm, prior_questions, prior_answers, tuning_context):
     system_message = json.loads(config.get('parameters', 'system_message'))
     user_message = json.loads(config.get('parameters', 'user_message'))
     user_message['content'] = user_message['content'].format(searchTerm=searchTerm)
 
-    # Add prior context to the messages array with alternating roles
     prior_context_messages = []
     for i in range(len(prior_questions)):
         prior_context_messages.append({"role": "user", "content": "Prior question: " + prior_questions[i]})
         if i < len(prior_answers):
             prior_context_messages.append({"role": "assistant", "content": "Prior answer: " + prior_answers[i]})
 
-    # Combine system message, prior context messages, and user message and tuning context in the desired order
+    tuning_context_entries = []
+    for text in tuning_context:
+        tuning_context_entries.append({"role": "user", "content": text})
+
     full_context_messages = [system_message] + prior_context_messages + [user_message] + tuning_context_entries
+    return full_context_messages
+
+
+def write_answer(searchTerm, source="direct Roboface query"):
+    #variables
+    answers = ""
+    timestamp = datetime.utcnow().isoformat()
+    user = getpass.getuser()
+    global prior_questions
+    global prior_answers
+
+    # Truncate prior context
+    prior_questions = truncate_prior_context(prior_questions)
+    prior_answers = truncate_prior_context(prior_answers) # Assuming similar truncation logic for answers
+
+    top_n_matches, matching_context, tuning_context = _get_similarity_matches(searchTerm, csv_list, embeddings_list)
+    
+    full_context_messages = _prepare_openai_messages(searchTerm, prior_questions, prior_answers, tuning_context)
 
     print("FULL CONTEXT MESSAGES", full_context_messages)
-
-    # Print the search term, top n matches, and the number of tokens in the messages array
-    tuningContext = prior_context_messages
-    print("\033[31m" + "PRIOR CONTEXT:" + "\033[0m", prior_context_messages)
+    print("\033[31m" + "PRIOR CONTEXT:" + "\033[0m", [msg for msg in full_context_messages if "Prior" in msg["content"]])
     print("\033[31m" + "CLIENT QUESTION:" + "\033[0m", searchTerm)
     print("\033[31m" + "QRA CONTEXT:" + "\033[0m", matching_context)
-    # Print the number of tokens in the messages variable
+    
     tokens = sum(len(message['content'].split()) for message in full_context_messages)
     print(f"Number of tokens in messages: {tokens}")
 
-    # Create a dictionary with the model, messages array, temperature, and max_tokens
+    max_retries = 3
+    retry_delay = 5  # seconds
 
-    data = {
-        "model": model,
-        "messages": full_context_messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-
-    # Convert the dictionary to JSON
-    jsonData = json.dumps(data)
-    # Set the API endpoint URL
-    apiUrl = 'https://api.openai.com/v1/chat/completions'
-
-    # Set the request headers
-    headers = {
-        'Content-Type': 'application/json',
-        'Authorization': f'Bearer {api_key}'
-    }
-
-    # Send the JSON data to the API using the requests library
-    try:
-        response = requests.post(apiUrl, headers=headers, data=jsonData).content
-        answers = json.loads(response)['choices'][0]['message']['content']
-        print('\033[32mANSWER:\033[0m', answers)
-        # Get the parameters using the new function
+    for attempt in range(max_retries):
+        try:
+            response = openai.ChatCompletion.create(
+                model=model,
+                messages=full_context_messages,
+                temperature=temperature,
+                max_tokens=max_tokens
+            )
+            answers = response.choices[0].message['content']
+            print('\032[32mANSWER:\033[0m', answers)
+            
+            # If successful, break out of the retry loop
+            break 
+        except (openai.RateLimitError, openai.APIConnectionError, openai.Timeout) as e:
+            print(f"Attempt {attempt + 1} of {max_retries} failed with retriable error: {str(e)}")
+            if attempt + 1 == max_retries:
+                print("Max retries reached. API call failed.")
+                with open('error.txt', 'a', encoding='utf-8') as file:
+                    file.write(f"OpenAI API Error (Max Retries Reached for {type(e).__name__}): {str(e)}\n")
+                answers = "" # Ensure answers is empty or an error message
+            else:
+                time.sleep(retry_delay)
+        except openai.APIError as e: # Non-retriable API errors (e.g., server-side issues)
+            with open('error.txt', 'a', encoding='utf-8') as file:
+                file.write(f"OpenAI API Error: {str(e)}\n")
+            print(f"OpenAI API Error (Non-retriable). Error message written to error.txt: {str(e)}")
+            answers = "" 
+            break # Do not retry for these errors
+        except openai.AuthenticationError as e: # Authentication issues
+            with open('error.txt', 'a', encoding='utf-8') as file:
+                file.write(f"OpenAI Authentication Error: {str(e)}\n")
+            print(f"OpenAI Authentication Error. Error message written to error.txt: {str(e)}")
+            answers = ""
+            break # Do not retry for these errors
+        except Exception as e: # Other unexpected errors
+            print("Error content:", e)
+            with open('error.txt', 'a', encoding='utf-8') as file:
+                file.write(f"Unexpected error: {str(e)}\n")
+            print("Unexpected error. Error message written to error.txt.")
+            answers = ""
+            break # Do not retry for these errors
+    
+    # Proceed only if 'answers' is not empty (i.e., API call was successful)
+    if answers:
         parameters = get_parameters(
             timestamp=timestamp,
             user=user,
@@ -301,24 +318,6 @@ def write_answer(searchTerm, source="direct Roboface query"):
 
             # Write data row
             writer.writerow([timestamp, user, model, temperature, max_tokens, searchTerm, similarity_threshold, matching_context, tuning_context, tokens, answers, source])  # Add the source parameter when writing the row
-
-    except requests.exceptions.RequestException as e:
-        with open('error.txt', 'a', encoding='utf-8') as file:
-            file.write(str(e))
-            file.write("\n")
-        print("API call failed. Error message written to error.txt.")
-    except KeyError as e:
-        with open('error.txt', 'a', encoding='utf-8') as file:
-            file.write(str(e))
-            file.write("\n")
-        print("JSON parsing error. Error message written to error.txt.")
-    except Exception as e:
-        print("Error content:", e)  # Print the error message directly to the console
-        with open('error.txt', 'a', encoding='utf-8') as file:
-            file.write(str(e))
-            file.write("\n")
-
-        print("Unexpected error. Error message written to error.txt.")
 
     #Append the current question and answer to the respective lists
     prior_questions.append(searchTerm)
