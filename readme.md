@@ -1,4 +1,5 @@
-Roboface
+My First RAG: "Roboface"
+In 2023, I created a RAG that effectively vectorized data in a CSV and wrote answers to compliance questions into an Excel file. By use of careful prompting, grounding, and context control, its answers were acceptably accurate 97% of the time.
 ========
 
 Description
