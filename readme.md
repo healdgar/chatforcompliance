@@ -1,5 +1,5 @@
 My First RAG: "Roboface"
-In 2023, I created a RAG that effectively vectorized data in a CSV and wrote answers to compliance questions into an Excel file. By use of careful prompting, grounding, and context control, its answers were acceptably accurate 97% of the time.
+In 2023, I created a RAG that effectively vectorized data in a CSV and wrote answers to compliance questions into an Excel file. By use of careful prompting, grounding, and context control, its answers were acceptably accurate 97% of the time when using GPT 3.5 (which was the only version available at the time).
 ========
 
 Description
